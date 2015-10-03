@@ -10,6 +10,8 @@ case class ReportMsgRecvd(message: String) extends Gossip
 case class StartPushSum(delta: Double) extends Gossip
 case class ComputePushSum(s: Double, w: Double, delta: Double) extends Gossip
 case class Result(sum: Double, weight: Double) extends Gossip 
+case class RecordStartTime(startTime:Long) extends Gossip
+case class RecordNumPeople(strtTime: Int) extends Gossip
 
 class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
   var neighbors:Array[ActorRef] = null
@@ -50,7 +52,7 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
       sum = sum/2
       weight = weight/2
       neighbors(randNeighbor) ! ComputePushSum(sum, weight, delta)
-      
+
 
     case ComputePushSum(s, w, delta) =>
       //println("\n********** NODE " + nodeNum + " ************")
@@ -71,8 +73,8 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
         neighbors(randNeighbor) ! ComputePushSum(sum, weight, delta)
 
       }
-      else if (termRound >= 10)  {
-       // println("TERMINATING: Sum = " + sum + "\tWeight = " + weight + "\tAverage = " + sum/weight)
+      else if (termRound >= 3)  {
+        // println("TERMINATING: Sum = " + sum + "\tWeight = " + weight + "\tAverage = " + sum/weight)
         listener ! Result(sum, weight)
       }
       else {
@@ -92,16 +94,30 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
 
 class Listener extends Actor {
   var msgsReceived = 0
-
+  var startTime = 0L
+  var numPeople = 0
   def receive = {
     case ReportMsgRecvd(message) =>
+      var endTime = System.currentTimeMillis()
       msgsReceived += 1
-      println(msgsReceived + " : " + sender)
+      //println(msgsReceived + " : " + sender)
+      if(msgsReceived == numPeople) {
+        println("Time for convergence: "+(endTime-startTime)+"ms")
+        System.exit(0)
+      }
       //println(msgsReceived)
 
     case Result(sum, weight) =>
+      var endTime = System.currentTimeMillis()
       println("Sum = " + sum + " Weight = " + weight + " Average = " + (sum/weight))
+      println("Time for convergence: " + (endTime-startTime) +"ms")
       System.exit(0)
+
+    case RecordStartTime(strtTime) =>
+      startTime = strtTime
+
+    case RecordNumPeople(numpeople) =>
+      numPeople = numpeople
   }
 }
 
@@ -148,7 +164,6 @@ object GossipProtocol extends App {
       val listener = system.actorOf(Props[Listener], name = "listener")
 
       println("Building topology . . . .")
-      val timeStart = System.currentTimeMillis()
 
       // Consider all the topologies
       topology match {
@@ -166,9 +181,14 @@ object GossipProtocol extends App {
           // Randomly select the leader node
           val leader = scala.util.Random.nextInt(numNodes)
           if (protocol == "gossip") {
+            listener ! RecordNumPeople(numNodes)
+            listener ! RecordStartTime(System.currentTimeMillis())
+            println("Starting Protocol Gossip")
             Nodes(leader) ! StartGossip("Hello")
           }
           else if (protocol == "push-sum") {
+            listener ! RecordStartTime(System.currentTimeMillis())
+            println("Starting Protocol Push-Sum")
             Nodes(leader) ! StartPushSum(pow(10, -10))
           }
 
@@ -203,9 +223,14 @@ object GossipProtocol extends App {
           val d3 = scala.util.Random.nextInt(cuberoot)
 
           if (protocol == "gossip") {
+            listener ! RecordNumPeople(numNodes)
+            listener ! RecordStartTime(System.currentTimeMillis())
+            println("Starting Protocol Gossip")
             Nodes(d1)(d2)(d3) ! StartGossip("J'aime le chocolat")
           }
           else if (protocol == "push-sum") {
+            listener ! RecordStartTime(System.currentTimeMillis())
+            println("Starting Protocol Push-Sum")
             Nodes(d1)(d2)(d3) ! StartPushSum(pow(10, -10))
           }
 
@@ -225,8 +250,13 @@ object GossipProtocol extends App {
           // Randomly select the leader node
           val leader = scala.util.Random.nextInt(numNodes)
           if (protocol == "gossip") {
+            listener ! RecordNumPeople(numNodes)
+            listener ! RecordStartTime(System.currentTimeMillis())
+            println("Starting Protocol Gossip")
             Nodes(leader) ! StartGossip("Let's get to work!")
           } else if (protocol == "push-sum") {
+            listener ! RecordStartTime(System.currentTimeMillis())
+            println("Starting Protocol Push-Sum")
             println("Main() - Calling now..")
             Nodes(leader) ! StartPushSum(pow(10, -10))
           }
@@ -273,10 +303,15 @@ object GossipProtocol extends App {
           d3 = scala.util.Random.nextInt(cuberoot)
 
           if (protocol == "gossip") {
+            listener ! RecordNumPeople(numNodes)
+            listener ! RecordStartTime(System.currentTimeMillis())
+            println("Starting Protocol Gossip")
             Nodes(d1)(d2)(d3) ! StartGossip("J'aime le piment")
           }
           else if (protocol == "push-sum") {
-            Nodes(d1)(d2)(d3) ! StartPushSum(pow(10, -20))
+            listener ! RecordStartTime(System.currentTimeMillis())
+            println("Starting Protocol Push-Sum")
+            Nodes(d1)(d2)(d3) ! StartPushSum(pow(10, -10))
           }
 
 
