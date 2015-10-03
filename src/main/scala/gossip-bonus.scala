@@ -2,22 +2,42 @@ import akka.actor._
 import akka.actor.Props
 import scala.math._
 
-sealed trait Gossip
+sealed trait FailureGossip
 
-case class Initialize(actorRefs: Array[ActorRef]) extends Gossip
-case class StartGossip(message: String) extends Gossip
-case class ReportMsgRecvd(message: String) extends Gossip
-case class StartPushSum(delta: Double) extends Gossip
-case class ComputePushSum(s: Double, w: Double, delta: Double) extends Gossip
-case class Result(sum: Double, weight: Double) extends Gossip 
-case class RecordStartTime(startTime:Long) extends Gossip
-case class RecordNumPeople(strtTime: Int) extends Gossip
+case class FailureInitialize(actorRefs: Array[ActorRef]) extends FailureGossip
+case class FailureStartGossip(message: String, timeToSleep: Int) extends FailureGossip
+case class FailureReportMsgRecvd(message: String) extends FailureGossip
+case class FailureStartPushSum(delta: Double) extends FailureGossip
+case class FailureComputePushSum(s: Double, w: Double, delta: Double) extends FailureGossip
+case class FailureResult(sum: Double, weight: Double) extends FailureGossip 
+case class FailureRecordStartTime(startTime:Long) extends FailureGossip
+case class FailureRecordNumPeople(strtTime: Int) extends FailureGossip
+case class FailureGoToSleep(timeToSleep: Int) extends FailureGossip
+case class FailureLicenseToKill(nodesRef: Array[ActorRef]) extends FailureGossip
+case class FailureKill(timeToSleep: Int) extends FailureGossip
 
 
-class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
+// Contract Killer
+class ContractKiller(nodesToKill: Int) extends Actor {
+
+    def receive = {
+        case FailureLicenseToKill(nodesRef) =>
+            for(i <- 0 to nodesToKill) {
+                var victim = scala.util.Random.nextInt(nodesRef.length)
+                nodesRef(victim) ! FailureKill(100)
+                //Thread.sleep(1)
+            }
+
+        case _ =>
+            println("Error: Invalid message!")
+            System.exit(1)
+    }
+}
+
+class FailureNode(listener: ActorRef, numResend: Int, nodeNum: Int, state: String) extends Actor {
     var neighbors:Array[ActorRef] = null
     var numMsgHeard = 0 
-
+    var currState = state
 
     // Used for Push-Sum only
     var sum = nodeNum.toDouble
@@ -25,26 +45,37 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
     var termRound = 1 
 
     def receive = {
-        case Initialize(actorRefs) =>
+        case FailureInitialize(actorRefs) =>
             neighbors = actorRefs 
-        case StartGossip(message) =>
-            //println("recieved a StartGossip message in " +self)
-            numMsgHeard += 1
 
-            // Notify listener after getting the first message (to help find convergence)
-            if (numMsgHeard == 1)
-                listener ! ReportMsgRecvd(message)
+        case FailureKill(timeToSleep) =>
+            println(self + " - Going to sleep")
+            currState = "DEAD"
+            //Thread.sleep(timeToSleep)
+            //println(self + " - I'm UP!")
 
-            // If the current rumour has been heard < 100 times, send the message again
-            if (numMsgHeard < 100) {
-                // Get a random neighbor 
-                var randNeighbor = scala.util.Random.nextInt(neighbors.length)
-                //println("Sending msg to " + randNeighbor)
-                neighbors(randNeighbor) ! StartGossip(message)
+        case FailureStartGossip(message, timeToSleep) =>
+            if (currState == "ALIVE") {
+    /*            if (timeToSleep != 0)
+                    Thread.sleep(timeToSleep)*/
+    
+                numMsgHeard += 1
+    
+                // Notify listener after getting the first message (to help find convergence)
+                if (numMsgHeard == 1)
+                    listener ! FailureReportMsgRecvd(message)
+    
+                // If the current rumour has been heard < 100 times, send the message again
+                if (numMsgHeard < 100) {
+                    // Get a random neighbor 
+                    var randNeighbor = scala.util.Random.nextInt(neighbors.length)
+                    //println("Sending msg to " + randNeighbor)
+                    neighbors(randNeighbor) ! FailureStartGossip(message, 0)
+                }   
             }
 
 
-        case StartPushSum(delta) => 
+        case FailureStartPushSum(delta) => 
             //println("Node "+ self + ": Starting Push-Sum . . . .")
             //println("\n********** NODE " + nodeNum + " ************")
             //println("Sum = " + sum + " Weight = " + weight + " Average = " + (sum/weight))
@@ -52,10 +83,10 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
             var randNeighbor = scala.util.Random.nextInt(neighbors.length)
             sum = sum/2
             weight = weight/2
-            neighbors(randNeighbor) ! ComputePushSum(sum, weight, delta)
+            neighbors(randNeighbor) ! FailureComputePushSum(sum, weight, delta)
 
 
-        case ComputePushSum(s, w, delta) =>
+        case FailureComputePushSum(s, w, delta) =>
             //println("\n********** NODE " + nodeNum + " ************")
             //println("Sum = " + sum + " Weight = " + weight + " Average = " + (sum/weight))
             //println("Received: Sum = " + s + "\tWeight = " + w)
@@ -71,18 +102,18 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
                 sum = sum/2
                 weight = weight/2
                 var randNeighbor = scala.util.Random.nextInt(neighbors.length)
-                neighbors(randNeighbor) ! ComputePushSum(sum, weight, delta)
+                neighbors(randNeighbor) ! FailureComputePushSum(sum, weight, delta)
 
             }
             else if (termRound >= 3)  {
                 // println("TERMINATING: Sum = " + sum + "\tWeight = " + weight + "\tAverage = " + sum/weight)
-                listener ! Result(sum, weight)
+                listener ! FailureResult(sum, weight)
             }
             else {
                 var randNeighbor = scala.util.Random.nextInt(neighbors.length)
                 sum = sum/2
                 weight = weight/2
-                neighbors(randNeighbor) ! ComputePushSum(sum, weight, delta)
+                neighbors(randNeighbor) ! FailureComputePushSum(sum, weight, delta)
                 termRound += 1
             }
 
@@ -93,31 +124,31 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
     }
 }
 
-class Listener extends Actor {
+class FailureListener extends Actor {
     var msgsReceived = 0
     var startTime = 0L
     var numPeople = 0
     def receive = {
-        case ReportMsgRecvd(message) =>
+        case FailureReportMsgRecvd(message) =>
             var endTime = System.currentTimeMillis()
             msgsReceived += 1
-            //println(msgsReceived + " : " + sender)
+            println(msgsReceived + " : " + sender)
             if(msgsReceived == numPeople) {
                 println("Time for convergence: "+(endTime-startTime)+"ms")
                 System.exit(0)
             }
             //println(msgsReceived)
 
-        case Result(sum, weight) =>
+        case FailureResult(sum, weight) =>
             var endTime = System.currentTimeMillis()
             println("Sum = " + sum + " Weight = " + weight + " Average = " + (sum/weight))
             println("Time for convergence: " + (endTime-startTime) +"ms")
             System.exit(0)
 
-        case RecordStartTime(strtTime) =>
+        case FailureRecordStartTime(strtTime) =>
             startTime = strtTime
 
-        case RecordNumPeople(numpeople) =>
+        case FailureRecordNumPeople(numpeople) =>
             numPeople = numpeople
 
         case _ =>
@@ -129,7 +160,7 @@ class Listener extends Actor {
 
 object GossipProtocol extends App {
     override def main(args: Array[String]) {
-        if(args.length != 3) {
+        if(args.length != 4) {
             println("Error: Enter the correct arguments");
             System.exit(1)
         }
@@ -137,6 +168,8 @@ object GossipProtocol extends App {
         val system = ActorSystem("Gossip")
         var topology = ""
         var protocol = ""
+        var percentFailure = 0
+        var nodesToKill = 0
         var numNodes = 0
         var i = 0
         var j = 0
@@ -166,9 +199,20 @@ object GossipProtocol extends App {
                 System.exit(1); 
             }
 
+            // Check for the failure model parameter
+            if (!isAllDigits(args(3))) {
+                println("Error: Invalid argument. Please enter an integer.");
+                System.exit(1);    
+            }
+            else {
+                percentFailure = args(3).toInt
+                nodesToKill = floor(percentFailure*numNodes/100).toInt
+            }
+
             val listener = system.actorOf(Props[Listener], name = "listener")
 
             println("Building topology . . . .")
+
 
             // Consider all the topologies
             topology match {
@@ -177,25 +221,30 @@ object GossipProtocol extends App {
                 case "full" =>
                     var Nodes:Array[ActorRef] = new Array[ActorRef](numNodes)
                     for( i <- 0 until numNodes) {
-                        Nodes(i) = system.actorOf(Props(new Node(listener, numResend, i+1)));
+                        Nodes(i) = system.actorOf(Props(new FailureNode(listener, numResend, i+1, "ALIVE")));
                     }
                     for( i <- 0 until numNodes) {
-                        Nodes(i) ! Initialize(Nodes)
+                        Nodes(i) ! FailureInitialize(Nodes)
                     }
 
                     // Randomly select the leader node
                     val leader = scala.util.Random.nextInt(numNodes)
                     if (protocol == "gossip") {
-                        listener ! RecordNumPeople(numNodes)
-                        listener ! RecordStartTime(System.currentTimeMillis())
+                        listener ! FailureRecordNumPeople(numNodes)
+                        listener ! FailureRecordStartTime(System.currentTimeMillis())
                         println("Starting Protocol Gossip")
-                        Nodes(leader) ! StartGossip("Hello")
+                        Nodes(leader) ! FailureStartGossip("Hello", 20)
+
                     }
                     else if (protocol == "push-sum") {
-                        listener ! RecordStartTime(System.currentTimeMillis())
+                        listener ! FailureRecordStartTime(System.currentTimeMillis())
                         println("Starting Protocol Push-Sum")
-                        Nodes(leader) ! StartPushSum(pow(10, -10))
+                        Nodes(leader) ! FailureStartPushSum(pow(10, -10))
                     }
+
+                    // Activate the killer
+                    var killer = system.actorOf(Props(new ContractKiller(nodesToKill)))
+                    killer ! FailureLicenseToKill(Nodes)
 
 
                     // 3D TOPOLOGY
@@ -207,7 +256,7 @@ object GossipProtocol extends App {
                     for(i <- 0 until cuberoot) {
                         for(j <- 0 until cuberoot) {
                             for(k <- 0 until cuberoot) {
-                                Nodes(i)(j)(k) = system.actorOf(Props(new Node(listener, numResend,(i*cubesquare)+(j*cuberoot)+k+1)));
+                                Nodes(i)(j)(k) = system.actorOf(Props(new FailureNode(listener, numResend,(i*cubesquare)+(j*cuberoot)+k+1, "ALIVE")));
                             }
                         }
                     }
@@ -218,7 +267,7 @@ object GossipProtocol extends App {
                                 var NeighborArray = Array(Nodes((i-1+cuberoot)%cuberoot)(j)(k), Nodes((i+1+cuberoot)%cuberoot)(j)(k),
                                     Nodes(i)((j-1+cuberoot)%cuberoot)(k), Nodes(i)((j+1+cuberoot)%cuberoot)(k),
                                     Nodes(i)(j)((k-1+cuberoot)%cuberoot), Nodes(i)(j)((k+1+cuberoot)%cuberoot))
-                                Nodes(i)(j)(k) ! Initialize(NeighborArray)
+                                Nodes(i)(j)(k) ! FailureInitialize(NeighborArray)
                             }
                         }
                     }
@@ -228,15 +277,15 @@ object GossipProtocol extends App {
                     val d3 = scala.util.Random.nextInt(cuberoot)
 
                     if (protocol == "gossip") {
-                        listener ! RecordNumPeople(numNodes)
-                        listener ! RecordStartTime(System.currentTimeMillis())
+                        listener ! FailureRecordNumPeople(numNodes)
+                        listener ! FailureRecordStartTime(System.currentTimeMillis())
                         println("Starting Protocol Gossip")
-                        Nodes(d1)(d2)(d3) ! StartGossip("J'aime le chocolat")
+                        Nodes(d1)(d2)(d3) ! FailureStartGossip("J'aime le chocolat", 100)
                     }
                     else if (protocol == "push-sum") {
-                        listener ! RecordStartTime(System.currentTimeMillis())
+                        listener ! FailureRecordStartTime(System.currentTimeMillis())
                         println("Starting Protocol Push-Sum")
-                        Nodes(d1)(d2)(d3) ! StartPushSum(pow(10, -10))
+                        Nodes(d1)(d2)(d3) ! FailureStartPushSum(pow(10, -10))
                     }
 
 
@@ -244,26 +293,26 @@ object GossipProtocol extends App {
                 case "line" =>
                     var Nodes:Array[ActorRef] = new Array[ActorRef](numNodes)
                     for(i <- 0 until numNodes) {
-                        Nodes(i) = system.actorOf(Props(new Node(listener, numResend, i+1)));
+                        Nodes(i) = system.actorOf(Props(new FailureNode(listener, numResend, i+1, "ALIVE")));
                     }
 
                     for(i <- 0 until numNodes) {
                         var NeighborArray = Array(Nodes((i-1+numNodes)%numNodes), Nodes((i+1+numNodes)%numNodes))
-                        Nodes(i) ! Initialize(NeighborArray)
+                        Nodes(i) ! FailureInitialize(NeighborArray)
                     }
 
                     // Randomly select the leader node
                     val leader = scala.util.Random.nextInt(numNodes)
                     if (protocol == "gossip") {
-                        listener ! RecordNumPeople(numNodes)
-                        listener ! RecordStartTime(System.currentTimeMillis())
+                        listener ! FailureRecordNumPeople(numNodes)
+                        listener ! FailureRecordStartTime(System.currentTimeMillis())
                         println("Starting Protocol Gossip")
-                        Nodes(leader) ! StartGossip("Let's get to work!")
+                        Nodes(leader) ! FailureStartGossip("Let's get to work!", 100)
                     } else if (protocol == "push-sum") {
-                        listener ! RecordStartTime(System.currentTimeMillis())
+                        listener ! FailureRecordStartTime(System.currentTimeMillis())
                         println("Starting Protocol Push-Sum")
                         println("Main() - Calling now..")
-                        Nodes(leader) ! StartPushSum(pow(10, -10))
+                        Nodes(leader) ! FailureStartPushSum(pow(10, -10))
                     }
 
 
@@ -275,7 +324,7 @@ object GossipProtocol extends App {
                     for(i <- 0 until cuberoot) {
                         for(j <- 0 until cuberoot) {
                             for(k <- 0 until cuberoot) {
-                                Nodes(i)(j)(k) = system.actorOf(Props(new Node(listener, numResend,(i*cubesquare)+(j*cuberoot)+k+1)));
+                                Nodes(i)(j)(k) = system.actorOf(Props(new FailureNode(listener, numResend,(i*cubesquare)+(j*cuberoot)+k+1, "ALIVE")));
                             }
                         }
                     }
@@ -298,7 +347,7 @@ object GossipProtocol extends App {
                                     Nodes(i)(j)((k-1+cuberoot)%cuberoot), Nodes(i)(j)((k+1+cuberoot)%cuberoot),
                                     Nodes(d1)(d2)(d3))
 
-                                Nodes(i)(j)(k) ! Initialize(NeighborArray)
+                                Nodes(i)(j)(k) ! FailureInitialize(NeighborArray)
                             }
                         }
                     }
@@ -308,15 +357,15 @@ object GossipProtocol extends App {
                     d3 = scala.util.Random.nextInt(cuberoot)
 
                     if (protocol == "gossip") {
-                        listener ! RecordNumPeople(numNodes)
-                        listener ! RecordStartTime(System.currentTimeMillis())
+                        listener ! FailureRecordNumPeople(numNodes)
+                        listener ! FailureRecordStartTime(System.currentTimeMillis())
                         println("Starting Protocol Gossip")
-                        Nodes(d1)(d2)(d3) ! StartGossip("J'aime le piment")
+                        Nodes(d1)(d2)(d3) ! FailureStartGossip("J'aime le piment", 100)
                     }
                     else if (protocol == "push-sum") {
-                        listener ! RecordStartTime(System.currentTimeMillis())
+                        listener ! FailureRecordStartTime(System.currentTimeMillis())
                         println("Starting Protocol Push-Sum")
-                        Nodes(d1)(d2)(d3) ! StartPushSum(pow(10, -10))
+                        Nodes(d1)(d2)(d3) ! FailureStartPushSum(pow(10, -10))
                     }
 
 
@@ -324,7 +373,7 @@ object GossipProtocol extends App {
                     println("Error: Invalid topology")
                     System.exit(1)
             }
-
     } 
+
     def isAllDigits(x: String) = x forall Character.isDigit
 }
