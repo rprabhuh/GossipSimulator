@@ -7,11 +7,18 @@ sealed trait Gossip
 case class Initialize(actorRefs: Array[ActorRef]) extends Gossip
 case class StartGossip(message: String) extends Gossip
 case class ReportMsgRecvd(message: String) extends Gossip
+case class StartPushSum(delta: Double) extends Gossip
+case class ComputePushSum(s: Double, w: Double, delta: Double) extends Gossip
+case class Result(sum: Double, weight: Double) extends Gossip 
 
-
-class Node(listener: ActorRef, numResend: Int) extends Actor {
+class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
   var neighbors:Array[ActorRef] = null
   var numMsgHeard = 0
+
+  // Used for Push-Sum only
+  var sum = nodeNum.toDouble
+  var weight = 1.0
+  var termRound = 1
 
   def receive = {
     case Initialize(actorRefs) =>
@@ -32,6 +39,54 @@ class Node(listener: ActorRef, numResend: Int) extends Actor {
         //println("Sending msg to " + randNeighbor)
         neighbors(randNeighbor) ! StartGossip(message)
       }
+
+
+    case StartPushSum(delta) => 
+      //println("Node "+ self + ": Starting Push-Sum . . . .")
+      //println("\n********** NODE " + nodeNum + " ************")
+      //println("Sum = " + sum + " Weight = " + weight + " Average = " + (sum/weight))
+
+      var randNeighbor = scala.util.Random.nextInt(neighbors.length)
+      sum = sum/2
+      weight = weight/2
+      neighbors(randNeighbor) ! ComputePushSum(sum, weight, delta)
+      
+
+    case ComputePushSum(s, w, delta) =>
+      //println("\n********** NODE " + nodeNum + " ************")
+      //println("Sum = " + sum + " Weight = " + weight + " Average = " + (sum/weight))
+      //println("Received: Sum = " + s + "\tWeight = " + w)
+      //println("TOTAL: Sum = " + (sum+s) + "\tWeight = " + (weight+w))
+      var newsum = sum + s
+      var newweight = weight + w
+      // Check for divergence, and terminate if avg is within delta for 3 consecutive rounds
+      if (abs(sum/weight - newsum/newweight) > delta) {
+        termRound = 0
+        sum += s
+        weight += w
+
+        sum = sum/2
+        weight = weight/2
+        var randNeighbor = scala.util.Random.nextInt(neighbors.length)
+        neighbors(randNeighbor) ! ComputePushSum(sum, weight, delta)
+
+      }
+      else if (termRound >= 10)  {
+       // println("TERMINATING: Sum = " + sum + "\tWeight = " + weight + "\tAverage = " + sum/weight)
+        listener ! Result(sum, weight)
+      }
+      else {
+        var randNeighbor = scala.util.Random.nextInt(neighbors.length)
+        sum = sum/2
+        weight = weight/2
+        neighbors(randNeighbor) ! ComputePushSum(sum, weight, delta)
+        termRound += 1
+      }
+
+
+    case _ =>
+      println("Error: Invalid message!")
+      System.exit(1)
   }
 }
 
@@ -43,6 +98,10 @@ class Listener extends Actor {
       msgsReceived += 1
       println(msgsReceived + " : " + sender)
       //println(msgsReceived)
+
+    case Result(sum, weight) =>
+      println("Sum = " + sum + " Weight = " + weight + " Average = " + (sum/weight))
+      System.exit(0)
   }
 }
 
@@ -82,7 +141,7 @@ object GossipProtocol extends App {
 
       // Validate Protocol
       if (protocol != "gossip" && protocol != "push-sum") {
-      	println("Error: Invalid Protocol. Please enter either gossip or push-sum.");
+        println("Error: Invalid Protocol. Please enter either gossip or push-sum.");
         System.exit(1);	
       }
 
@@ -94,31 +153,36 @@ object GossipProtocol extends App {
       // Consider all the topologies
       topology match {
 
-      	// FULL TOPOLOGY
+        // FULL TOPOLOGY
         case "full" =>
           var Nodes:Array[ActorRef] = new Array[ActorRef](numNodes)
           for( i <- 0 until numNodes) {
-            Nodes(i) = system.actorOf(Props(new Node(listener, numResend)));
+            Nodes(i) = system.actorOf(Props(new Node(listener, numResend, i+1)));
           }
           for( i <- 0 until numNodes) {
             Nodes(i) ! Initialize(Nodes)
           }
 
-		      // Randomly select the leader node
-    		  val leader = scala.util.Random.nextInt(numNodes)
-          Nodes(leader) ! StartGossip("Hello")
+          // Randomly select the leader node
+          val leader = scala.util.Random.nextInt(numNodes)
+          if (protocol == "gossip") {
+            Nodes(leader) ! StartGossip("Hello")
+          }
+          else if (protocol == "push-sum") {
+            Nodes(leader) ! StartPushSum(pow(10, -10))
+          }
 
 
-        // 3D TOPOLOGY
+          // 3D TOPOLOGY
         case "3D" =>
           // Construct an array of 6 neighboring nodes
-          //var cubesquare = pow(cuberoot,2)
+          var cubesquare = pow(cuberoot,2).toInt
           var Nodes = Array.ofDim[ActorRef](cuberoot,cuberoot,cuberoot)
 
           for(i <- 0 until cuberoot) {
             for(j <- 0 until cuberoot) {
               for(k <- 0 until cuberoot) {
-                Nodes(i)(j)(k) = system.actorOf(Props(new Node(listener, numResend)));
+                Nodes(i)(j)(k) = system.actorOf(Props(new Node(listener, numResend,(i*cubesquare)+(j*cuberoot)+k+1)));
               }
             }
           }
@@ -127,9 +191,8 @@ object GossipProtocol extends App {
             for(j <- 0 until cuberoot) {
               for(k <- 0 until cuberoot) {
                 var NeighborArray = Array(Nodes((i-1+cuberoot)%cuberoot)(j)(k), Nodes((i+1+cuberoot)%cuberoot)(j)(k),
-                													Nodes(i)((j-1+cuberoot)%cuberoot)(k), Nodes(i)((j+1+cuberoot)%cuberoot)(k),
-                													Nodes(i)(j)((k-1+cuberoot)%cuberoot), Nodes(i)(j)((k+1+cuberoot)%cuberoot))
-
+                  Nodes(i)((j-1+cuberoot)%cuberoot)(k), Nodes(i)((j+1+cuberoot)%cuberoot)(k),
+                  Nodes(i)(j)((k-1+cuberoot)%cuberoot), Nodes(i)(j)((k+1+cuberoot)%cuberoot))
                 Nodes(i)(j)(k) ! Initialize(NeighborArray)
               }
             }
@@ -139,34 +202,45 @@ object GossipProtocol extends App {
           val d2 = scala.util.Random.nextInt(cuberoot)
           val d3 = scala.util.Random.nextInt(cuberoot)
 
-          Nodes(d1)(d2)(d3) ! StartGossip("J'aime le chocolat")
+          if (protocol == "gossip") {
+            Nodes(d1)(d2)(d3) ! StartGossip("J'aime le chocolat")
+          }
+          else if (protocol == "push-sum") {
+            Nodes(d1)(d2)(d3) ! StartPushSum(pow(10, -10))
+          }
 
 
-        // LINE TOPOLOGY
+          // LINE TOPOLOGY
         case "line" =>
-        	var Nodes:Array[ActorRef] = new Array[ActorRef](numNodes)
+          var Nodes:Array[ActorRef] = new Array[ActorRef](numNodes)
           for(i <- 0 until numNodes) {
-            Nodes(i) = system.actorOf(Props(new Node(listener, numResend)));
+            Nodes(i) = system.actorOf(Props(new Node(listener, numResend, i+1)));
           }
 
           for(i <- 0 until numNodes) {
-          	var NeighborArray = Array(Nodes((i-1+numNodes)%numNodes), Nodes((i+1+numNodes)%numNodes))
+            var NeighborArray = Array(Nodes((i-1+numNodes)%numNodes), Nodes((i+1+numNodes)%numNodes))
             Nodes(i) ! Initialize(NeighborArray)
           }
 
-		      // Randomly select the leader node
-    		  val leader = scala.util.Random.nextInt(numNodes)
-          Nodes(leader) ! StartGossip("Let's get to work!")
+          // Randomly select the leader node
+          val leader = scala.util.Random.nextInt(numNodes)
+          if (protocol == "gossip") {
+            Nodes(leader) ! StartGossip("Let's get to work!")
+          } else if (protocol == "push-sum") {
+            println("Main() - Calling now..")
+            Nodes(leader) ! StartPushSum(pow(10, -10))
+          }
 
 
-        // IMPERFECT 3D TOPOLOGY
+          // IMPERFECT 3D TOPOLOGY
         case "imp3D" =>
-        	var Nodes = Array.ofDim[ActorRef](cuberoot,cuberoot,cuberoot)
+          var cubesquare = pow(cuberoot,2).toInt
+          var Nodes = Array.ofDim[ActorRef](cuberoot,cuberoot,cuberoot)
 
           for(i <- 0 until cuberoot) {
             for(j <- 0 until cuberoot) {
               for(k <- 0 until cuberoot) {
-                Nodes(i)(j)(k) = system.actorOf(Props(new Node(listener, numResend)));
+                Nodes(i)(j)(k) = system.actorOf(Props(new Node(listener, numResend,(i*cubesquare)+(j*cuberoot)+k+1)));
               }
             }
           }
@@ -177,18 +251,18 @@ object GossipProtocol extends App {
           for(i <- 0 until cuberoot) {
             for(j <- 0 until cuberoot) {
               for(k <- 0 until cuberoot) {
-              	
-              	// Choose a random neighbor
-              d1 = scala.util.Random.nextInt(cuberoot)
-          		d2 = scala.util.Random.nextInt(cuberoot)
-          		d3 = scala.util.Random.nextInt(cuberoot)
 
-              	// NeighborArray consists of 6 neighbors + 1 randomly chosen neighbor
+                // Choose a random neighbor
+                d1 = scala.util.Random.nextInt(cuberoot)
+                d2 = scala.util.Random.nextInt(cuberoot)
+                d3 = scala.util.Random.nextInt(cuberoot)
+
+                // NeighborArray consists of 6 neighbors + 1 randomly chosen neighbor
                 var NeighborArray = Array(Nodes((i-1+cuberoot)%cuberoot)(j)(k), Nodes((i+1+cuberoot)%cuberoot)(j)(k),
-                													Nodes(i)((j-1+cuberoot)%cuberoot)(k), Nodes(i)((j+1+cuberoot)%cuberoot)(k),
-                													Nodes(i)(j)((k-1+cuberoot)%cuberoot), Nodes(i)(j)((k+1+cuberoot)%cuberoot),
-                													Nodes(d1)(d2)(d3))
-                
+                  Nodes(i)((j-1+cuberoot)%cuberoot)(k), Nodes(i)((j+1+cuberoot)%cuberoot)(k),
+                  Nodes(i)(j)((k-1+cuberoot)%cuberoot), Nodes(i)(j)((k+1+cuberoot)%cuberoot),
+                  Nodes(d1)(d2)(d3))
+
                 Nodes(i)(j)(k) ! Initialize(NeighborArray)
               }
             }
@@ -198,7 +272,12 @@ object GossipProtocol extends App {
           d2 = scala.util.Random.nextInt(cuberoot)
           d3 = scala.util.Random.nextInt(cuberoot)
 
-          Nodes(d1)(d2)(d3) ! StartGossip("J'aime le piment")
+          if (protocol == "gossip") {
+            Nodes(d1)(d2)(d3) ! StartGossip("J'aime le piment")
+          }
+          else if (protocol == "push-sum") {
+            Nodes(d1)(d2)(d3) ! StartPushSum(pow(10, -20))
+          }
 
 
         case _ =>
