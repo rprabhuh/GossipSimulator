@@ -28,7 +28,6 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
         case Initialize(actorRefs) =>
             neighbors = actorRefs 
         case StartGossip(message) =>
-            //println("recieved a StartGossip message in " +self)
             numMsgHeard += 1
 
             // Notify listener after getting the first message (to help find convergence)
@@ -39,15 +38,11 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
             if (numMsgHeard < 100) {
                 // Get a random neighbor 
                 var randNeighbor = scala.util.Random.nextInt(neighbors.length)
-                //println("Sending msg to " + randNeighbor)
                 neighbors(randNeighbor) ! StartGossip(message)
             }
 
 
         case StartPushSum(delta) => 
-            //println("Node "+ self + ": Starting Push-Sum . . . .")
-            //println("\n********** NODE " + nodeNum + " ************")
-            //println("Sum = " + sum + " Weight = " + weight + " Average = " + (sum/weight))
 
             var randNeighbor = scala.util.Random.nextInt(neighbors.length)
             sum = sum/2
@@ -56,10 +51,6 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
 
 
         case ComputePushSum(s, w, delta) =>
-            //println("\n********** NODE " + nodeNum + " ************")
-            //println("Sum = " + sum + " Weight = " + weight + " Average = " + (sum/weight))
-            //println("Received: Sum = " + s + "\tWeight = " + w)
-            //println("TOTAL: Sum = " + (sum+s) + "\tWeight = " + (weight+w))
             var newsum = sum + s
             var newweight = weight + w
             // Check for divergence, and terminate if avg is within delta for 3 consecutive rounds
@@ -75,7 +66,6 @@ class Node(listener: ActorRef, numResend: Int, nodeNum: Int) extends Actor {
 
             }
             else if (termRound >= 3)  {
-                // println("TERMINATING: Sum = " + sum + "\tWeight = " + weight + "\tAverage = " + sum/weight)
                 listener ! Result(sum, weight)
             }
             else {
@@ -101,12 +91,10 @@ class Listener extends Actor {
         case ReportMsgRecvd(message) =>
             var endTime = System.currentTimeMillis()
             msgsReceived += 1
-            //println(msgsReceived + " : " + sender)
             if(msgsReceived == numPeople) {
                 println("Time for convergence: "+(endTime-startTime)+"ms")
                 System.exit(0)
             }
-            //println(msgsReceived)
 
         case Result(sum, weight) =>
             var endTime = System.currentTimeMillis()
@@ -262,7 +250,6 @@ object GossipProtocol extends App {
                     } else if (protocol == "push-sum") {
                         listener ! RecordStartTime(System.currentTimeMillis())
                         println("Starting Protocol Push-Sum")
-                        println("Main() - Calling now..")
                         Nodes(leader) ! StartPushSum(pow(10, -10))
                     }
 
